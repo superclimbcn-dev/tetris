@@ -29,6 +29,25 @@ const DEFAULT_INPUT_TIMING: KeyboardTiming = {
 
 export type GameSnapshot = CoreGameState & {
   readonly ghostPiece: ActivePiece | null;
+  readonly recentEvent: GameFeedbackEvent | null;
+};
+
+export type GameFeedbackEventKind =
+  | "move"
+  | "rotate"
+  | "hold"
+  | "hard-drop"
+  | "lock"
+  | "clear"
+  | "pause"
+  | "resume"
+  | "game-over";
+
+export type GameFeedbackEvent = {
+  readonly kind: GameFeedbackEventKind;
+  readonly at: number;
+  readonly clearedLines: number;
+  readonly clearedRows: readonly number[];
 };
 
 export type GameCommands = {
@@ -82,6 +101,7 @@ function toSnapshot(state: CoreGameState): GameSnapshot {
   return {
     ...state,
     ghostPiece: getGhostPiece(state.board, state.activePiece),
+    recentEvent: null,
   };
 }
 
@@ -170,6 +190,22 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
     setSnapshot(nextSnapshot);
   };
 
+  const commitState = (
+    nextState: CoreGameState,
+    event?: Omit<GameFeedbackEvent, "at">,
+  ) => {
+    commitSnapshot({
+      ...toSnapshot(nextState),
+      recentEvent:
+        event === undefined
+          ? snapshotRef.current.recentEvent
+          : {
+              ...event,
+              at: performance.now(),
+            },
+    });
+  };
+
   const spawnNextPiece = (
     baseSnapshot: GameSnapshot,
     holdLocked = false,
@@ -238,7 +274,33 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
       },
     );
 
-    commitSnapshot(spawnNextPiece(toSnapshot(scoredState)));
+    const nextSnapshot = spawnNextPiece(toSnapshot(scoredState));
+    const nextEvent =
+      nextSnapshot.phase === "GAME_OVER"
+        ? {
+            kind: "game-over" as const,
+            clearedLines: clearResult.clearedLines,
+            clearedRows: clearResult.clearedRowIndexes,
+          }
+        : clearResult.clearedLines > 0
+          ? {
+              kind: "clear" as const,
+              clearedLines: clearResult.clearedLines,
+              clearedRows: clearResult.clearedRowIndexes,
+            }
+          : {
+              kind: "lock" as const,
+              clearedLines: 0,
+              clearedRows: [],
+            };
+
+    commitSnapshot({
+      ...nextSnapshot,
+      recentEvent: {
+        ...nextEvent,
+        at: performance.now(),
+      },
+    });
   };
 
   const movePiece = (deltaX: number, deltaY: number): boolean => {
@@ -258,11 +320,18 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
       return false;
     }
 
-    commitSnapshot(
-      toSnapshot({
+    commitState(
+      {
         ...currentSnapshot,
         activePiece: movedPiece,
-      }),
+      },
+      deltaX === 0
+        ? undefined
+        : {
+            kind: "move",
+            clearedLines: 0,
+            clearedRows: [],
+          },
     );
 
     return true;
@@ -277,10 +346,18 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
       commitSnapshot(runtime.snapshot);
     },
     pause: () => {
-      commitSnapshot(toSnapshot(transitionGameState(snapshotRef.current, { type: "PAUSE" })));
+      commitState(transitionGameState(snapshotRef.current, { type: "PAUSE" }), {
+        kind: "pause",
+        clearedLines: 0,
+        clearedRows: [],
+      });
     },
     resume: () => {
-      commitSnapshot(toSnapshot(transitionGameState(snapshotRef.current, { type: "RESUME" })));
+      commitState(transitionGameState(snapshotRef.current, { type: "RESUME" }), {
+        kind: "resume",
+        clearedLines: 0,
+        clearedRows: [],
+      });
     },
     moveLeft: () => {
       movePiece(-1, 0);
@@ -304,11 +381,16 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
         return;
       }
 
-      commitSnapshot(
-        toSnapshot({
+      commitState(
+        {
           ...currentSnapshot,
           activePiece: ghostPiece,
-        }),
+        },
+        {
+          kind: "hard-drop",
+          clearedLines: 0,
+          clearedRows: [],
+        },
       );
       lockCurrentPiece();
     },
@@ -326,11 +408,16 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
       const result = tryRotatePiece(currentSnapshot.board, activePiece, "CW");
 
       if (result.success) {
-        commitSnapshot(
-          toSnapshot({
+        commitState(
+          {
             ...currentSnapshot,
             activePiece: result.piece,
-          }),
+          },
+          {
+            kind: "rotate",
+            clearedLines: 0,
+            clearedRows: [],
+          },
         );
       }
     },
@@ -348,11 +435,16 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
       const result = tryRotatePiece(currentSnapshot.board, activePiece, "CCW");
 
       if (result.success) {
-        commitSnapshot(
-          toSnapshot({
+        commitState(
+          {
             ...currentSnapshot,
             activePiece: result.piece,
-          }),
+          },
+          {
+            kind: "rotate",
+            clearedLines: 0,
+            clearedRows: [],
+          },
         );
       }
     },
@@ -376,20 +468,27 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
           holdLocked: true,
         });
 
-        commitSnapshot(
-          spawnNextPiece(
-            toSnapshot({
-              ...heldState,
-              activePiece: null,
-              queue: {
-                ...heldState.queue,
-                hold: activePiece.type,
-                holdLocked: true,
-              },
-            }),
-            true,
-          ),
+        const nextSnapshot = spawnNextPiece(
+          toSnapshot({
+            ...heldState,
+            activePiece: null,
+            queue: {
+              ...heldState.queue,
+              hold: activePiece.type,
+              holdLocked: true,
+            },
+          }),
+          true,
         );
+        commitSnapshot({
+          ...nextSnapshot,
+          recentEvent: {
+            kind: "hold",
+            at: performance.now(),
+            clearedLines: 0,
+            clearedRows: [],
+          },
+        });
         return;
       }
 
@@ -401,27 +500,35 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
       };
 
       if (!canPlacePiece(currentSnapshot.board, swappedPiece)) {
-        commitSnapshot(
-          toSnapshot(
-            transitionGameState(
-              {
-                ...currentSnapshot,
-                activePiece: null,
-                queue: nextQueueState,
-              },
-              { type: "GAME_OVER" },
-            ),
+        commitState(
+          transitionGameState(
+            {
+              ...currentSnapshot,
+              activePiece: null,
+              queue: nextQueueState,
+            },
+            { type: "GAME_OVER" },
           ),
+          {
+            kind: "game-over",
+            clearedLines: 0,
+            clearedRows: [],
+          },
         );
         return;
       }
 
-      commitSnapshot(
-        toSnapshot({
+      commitState(
+        {
           ...currentSnapshot,
           activePiece: swappedPiece,
           queue: nextQueueState,
-        }),
+        },
+        {
+          kind: "hold",
+          clearedLines: 0,
+          clearedRows: [],
+        },
       );
     },
   };

@@ -7,6 +7,15 @@ export type InputSettings = {
   readonly arr: number;
 };
 
+export type AudioSettings = {
+  readonly sfxVolume: number;
+  readonly musicVolume: number;
+};
+
+export type GameplaySettings = {
+  readonly ghostEnabled: boolean;
+};
+
 export type UserSettingsSnapshot = {
   readonly userId: string;
   readonly das: number;
@@ -46,6 +55,19 @@ function toInputSettings(settings: UserSettingsSnapshot): InputSettings {
   };
 }
 
+function toAudioSettings(settings: UserSettingsSnapshot): AudioSettings {
+  return {
+    sfxVolume: settings.sfxVolume,
+    musicVolume: settings.musicVolume,
+  };
+}
+
+function toGameplaySettings(settings: UserSettingsSnapshot): GameplaySettings {
+  return {
+    ghostEnabled: settings.ghostEnabled,
+  };
+}
+
 export function useSettings() {
   const [settings, setSettings] = useState<UserSettingsSnapshot>(DEFAULT_SETTINGS);
   const [databaseReady, setDatabaseReady] = useState(false);
@@ -73,6 +95,8 @@ export function useSettings() {
         setDatabaseReady(payload.databaseReady);
         setSettings(payload.settings);
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload.settings));
+      } catch {
+        setDatabaseReady(false);
       } finally {
         hasLoadedRef.current = true;
       }
@@ -122,12 +146,27 @@ export function useSettings() {
   return {
     settings,
     input: toInputSettings(settings),
+    audio: toAudioSettings(settings),
+    gameplay: toGameplaySettings(settings),
     databaseReady,
     updateInputSettings: (next: Partial<InputSettings>) => {
       setSettings((current) => ({
         ...current,
         das: clamp(next.das ?? current.das, 50, 300),
         arr: clamp(next.arr ?? current.arr, 0, 100),
+      }));
+    },
+    updateAudioSettings: (next: Partial<AudioSettings>) => {
+      setSettings((current) => ({
+        ...current,
+        sfxVolume: clamp(next.sfxVolume ?? current.sfxVolume, 0, 1),
+        musicVolume: clamp(next.musicVolume ?? current.musicVolume, 0, 1),
+      }));
+    },
+    updateGameplaySettings: (next: Partial<GameplaySettings>) => {
+      setSettings((current) => ({
+        ...current,
+        ghostEnabled: next.ghostEnabled ?? current.ghostEnabled,
       }));
     },
   };

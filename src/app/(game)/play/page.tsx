@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getRotationMatrix, type TetrominoType } from "@/engine/types/tetromino";
+import { useAudio } from "@/hooks/useAudio";
 import { useGame } from "@/hooks/useGame";
 import { useSettings } from "@/hooks/useSettings";
 import { GameCanvas } from "@/render/canvas/GameCanvas";
@@ -48,10 +49,25 @@ function PiecePreview({ title, type }: PiecePreviewProps) {
 }
 
 export default function PlayPage() {
-  const { settings, input, databaseReady, updateInputSettings } = useSettings();
+  const {
+    settings,
+    input,
+    audio,
+    gameplay,
+    databaseReady,
+    updateInputSettings,
+    updateAudioSettings,
+    updateGameplaySettings,
+  } = useSettings();
   const { snapshot, commands, setSurfaceElement } = useGame({
     dasMs: input.das,
     arrMs: input.arr,
+  });
+  const audioControls = useAudio({
+    phase: snapshot.phase,
+    recentEvent: snapshot.recentEvent,
+    sfxVolume: audio.sfxVolume,
+    musicVolume: audio.musicVolume,
   });
 
   return (
@@ -138,13 +154,74 @@ export default function PlayPage() {
               </p>
             </CardContent>
           </Card>
+          <Card className="border-border/60 bg-card/60 backdrop-blur">
+            <CardHeader>
+              <CardTitle className="text-base">Juice Settings</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <label className="flex items-center justify-between gap-3 text-sm">
+                <span>Ghost piece</span>
+                <input
+                  type="checkbox"
+                  checked={gameplay.ghostEnabled}
+                  onChange={(event) =>
+                    updateGameplaySettings({ ghostEnabled: event.target.checked })
+                  }
+                  className="h-4 w-4"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm">
+                <span>Audio enabled</span>
+                <input
+                  type="checkbox"
+                  checked={audioControls.enabled}
+                  onChange={(event) => audioControls.setEnabled(event.target.checked)}
+                  className="h-4 w-4"
+                />
+              </label>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span>SFX</span>
+                  <span>{Math.round(settings.sfxVolume * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={settings.sfxVolume}
+                  onChange={(event) =>
+                    updateAudioSettings({ sfxVolume: Number(event.target.value) })
+                  }
+                  className="w-full"
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span>Music</span>
+                  <span>{Math.round(settings.musicVolume * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={settings.musicVolume}
+                  onChange={(event) =>
+                    updateAudioSettings({ musicVolume: Number(event.target.value) })
+                  }
+                  className="w-full"
+                />
+              </div>
+            </CardContent>
+          </Card>
         </aside>
 
         <section
           ref={setSurfaceElement}
           className="flex flex-col items-center gap-4 touch-manipulation"
         >
-          <GameCanvas snapshot={snapshot} />
+          <GameCanvas snapshot={snapshot} ghostEnabled={gameplay.ghostEnabled} />
           <Card className="w-full border-border/60 bg-card/60 backdrop-blur">
             <CardHeader>
               <CardTitle className="text-base">Controls</CardTitle>

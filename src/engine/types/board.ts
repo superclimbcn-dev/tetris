@@ -69,6 +69,7 @@ export type ActivePiece = {
 export type ClearedBoardResult = {
   readonly board: BoardMatrix;
   readonly clearedLines: number;
+  readonly clearedRowIndexes: readonly number[];
 };
 
 export const EMPTY_CELL: EmptyCell = { kind: "empty" };
@@ -209,6 +210,7 @@ export function lockPiece(board: BoardMatrix, piece: ActivePiece): BoardMatrix {
 }
 
 export function clearLines(board: BoardMatrix): ClearedBoardResult {
+  const clearedRowIndexes = board.flatMap((row, index) => (isRowFilled(row) ? [index] : []));
   const remainingRows = board.filter((row) => !isRowFilled(row));
   const clearedLines = BOARD_HEIGHT - remainingRows.length;
 
@@ -216,6 +218,7 @@ export function clearLines(board: BoardMatrix): ClearedBoardResult {
     return {
       board,
       clearedLines: 0,
+      clearedRowIndexes: [],
     };
   }
 
@@ -227,5 +230,6 @@ export function clearLines(board: BoardMatrix): ClearedBoardResult {
   return {
     board: nextRows as unknown as BoardMatrix,
     clearedLines,
+    clearedRowIndexes,
   };
 }
