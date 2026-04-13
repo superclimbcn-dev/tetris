@@ -11,12 +11,11 @@ import {
   type KeyboardTiming,
 } from "@/input/keyboard";
 import { attachTouchControls } from "@/input/touch";
-import { type ActivePiece, clearLines, lockPiece } from "@/engine/types/board";
+import { createEmptyBoard, type ActivePiece, clearLines, lockPiece } from "@/engine/types/board";
 import {
   createInitialGameState,
   transitionGameState,
   type CoreGameState,
-  type GamePhase,
   type GameMode,
 } from "@/engine/types/game";
 import { getTetrominoDefinition, type TetrominoType } from "@/engine/types/tetromino";
@@ -26,11 +25,8 @@ const DEFAULT_INPUT_TIMING: KeyboardTiming = {
   dasMs: 167,
   arrMs: 33,
 };
-
-export type GameSnapshot = CoreGameState & {
-  readonly ghostPiece: ActivePiece | null;
-  readonly recentEvent: GameFeedbackEvent | null;
-};
+const BLITZ_DURATION_MS = 120_000;
+const SPRINT_TARGET_LINES = 40;
 
 export type GameFeedbackEventKind =
   | "move"
@@ -41,13 +37,27 @@ export type GameFeedbackEventKind =
   | "clear"
   | "pause"
   | "resume"
-  | "game-over";
+  | "game-over"
+  | "mode-complete"
+  | "toast"
+  | "level-up";
 
 export type GameFeedbackEvent = {
   readonly kind: GameFeedbackEventKind;
   readonly at: number;
   readonly clearedLines: number;
   readonly clearedRows: readonly number[];
+  readonly message?: string;
+};
+
+export type GameSnapshot = CoreGameState & {
+  readonly ghostPiece: ActivePiece | null;
+  readonly recentEvent: GameFeedbackEvent | null;
+  readonly elapsedMs: number;
+  readonly remainingMs: number;
+  readonly targetLines: number | null;
+  readonly isModeComplete: boolean;
+  readonly displayMetric: number;
 };
 
 export type GameCommands = {
@@ -67,6 +77,18 @@ type UseGameResult = {
   readonly snapshot: GameSnapshot;
   readonly commands: GameCommands;
   readonly setSurfaceElement: (element: HTMLDivElement | null) => void;
+};
+
+type UseGameOptions = {
+  readonly mode?: GameMode;
+  readonly timing?: KeyboardTiming;
+};
+
+type RuntimeRefs = {
+  readonly mode: GameMode;
+  elapsedMs: number;
+  remainingMs: number;
+  isModeComplete: boolean;
 };
 
 function createSpawnPiece(type: TetrominoType): ActivePiece {
@@ -97,64 +119,64 @@ function getGhostPiece(board: CoreGameState["board"], piece: ActivePiece | null)
   }
 }
 
-function toSnapshot(state: CoreGameState): GameSnapshot {
+function getInitialRemainingMs(mode: GameMode): number {
+  return mode === "BLITZ" ? BLITZ_DURATION_MS : 0;
+}
+
+function getTargetLines(mode: GameMode): number | null {
+  return mode === "SPRINT" ? SPRINT_TARGET_LINES : null;
+}
+
+function getDisplayMetric(mode: GameMode, state: CoreGameState, elapsedMs: number): number {
+  if (mode === "SPRINT") {
+    return elapsedMs;
+  }
+
+  return state.score.score;
+}
+
+function toSnapshot(state: CoreGameState, runtime: RuntimeRefs): GameSnapshot {
   return {
     ...state,
     ghostPiece: getGhostPiece(state.board, state.activePiece),
     recentEvent: null,
+    elapsedMs: runtime.elapsedMs,
+    remainingMs: runtime.remainingMs,
+    targetLines: getTargetLines(runtime.mode),
+    isModeComplete: runtime.isModeComplete,
+    displayMetric: getDisplayMetric(runtime.mode, state, runtime.elapsedMs),
   };
 }
 
-function getGravityIntervalMs(level: number, phase: GamePhase): number {
-  if (phase === "ZONE_ACTIVE") {
-    return Number.POSITIVE_INFINITY;
+function getGravityIntervalMs(mode: GameMode, level: number, remainingMs: number): number {
+  if (mode === "ZEN") {
+    return 1200;
+  }
+
+  if (mode === "BLITZ") {
+    if (remainingMs <= 30_000) {
+      return 180;
+    }
+
+    if (remainingMs <= 60_000) {
+      return 300;
+    }
+
+    return 520;
+  }
+
+  if (mode === "SPRINT") {
+    return Math.max(90, 780 - (level - 1) * 35);
   }
 
   return Math.max(80, 900 - (level - 1) * 65);
 }
 
-function createRuntimeState(mode: GameMode): {
-  readonly snapshot: GameSnapshot;
-  readonly bag: SevenBagState;
-} {
-  const bagState = createSevenBagState();
-  const firstDraw = drawFromBag(bagState);
-  const firstPiece = createSpawnPiece(firstDraw.piece);
-  const baseState = createInitialGameState(mode);
-  const started = transitionGameState(baseState, {
-    type: "START",
-    mode,
-    firstPiece,
-  });
-  const queued = transitionGameState(started, {
-    type: "UPDATE_QUEUE",
-    next: peekNextPieces(firstDraw.state, PREVIEW_COUNT),
-    hold: null,
-    holdLocked: false,
-  });
-
-  if (!canPlacePiece(queued.board, firstPiece)) {
-    return {
-      bag: firstDraw.state,
-      snapshot: toSnapshot(
-        transitionGameState(
-          {
-            ...queued,
-            activePiece: null,
-          },
-          { type: "GAME_OVER" },
-        ),
-      ),
-    };
+function nextLevel(mode: GameMode, linesCleared: number): number {
+  if (mode === "ZEN") {
+    return 1;
   }
 
-  return {
-    bag: firstDraw.state,
-    snapshot: toSnapshot(queued),
-  };
-}
-
-function nextLevel(linesCleared: number): number {
   return Math.max(1, Math.floor(linesCleared / 10) + 1);
 }
 
@@ -173,9 +195,20 @@ function shouldIgnoreKeyboardEvent(event: KeyboardEvent): boolean {
   );
 }
 
-export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): UseGameResult {
+function createRuntimeRefs(mode: GameMode): RuntimeRefs {
+  return {
+    mode,
+    elapsedMs: 0,
+    remainingMs: getInitialRemainingMs(mode),
+    isModeComplete: false,
+  };
+}
+
+export function useGame(options: UseGameOptions = {}): UseGameResult {
+  const mode = options.mode ?? "CLASSIC";
+  const inputTiming = options.timing ?? DEFAULT_INPUT_TIMING;
   const [snapshot, setSnapshot] = useState<GameSnapshot>(() =>
-    toSnapshot(createInitialGameState("CLASSIC")),
+    toSnapshot(createInitialGameState(mode), createRuntimeRefs(mode)),
   );
   const [surfaceElement, setSurfaceElement] = useState<HTMLDivElement | null>(null);
 
@@ -184,6 +217,7 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
   const lastFrameRef = useRef<number | null>(null);
   const dropAccumulatorRef = useRef(0);
   const commandsRef = useRef<GameCommands | null>(null);
+  const runtimeRef = useRef<RuntimeRefs>(createRuntimeRefs(mode));
 
   const commitSnapshot = (nextSnapshot: GameSnapshot) => {
     snapshotRef.current = nextSnapshot;
@@ -195,7 +229,7 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
     event?: Omit<GameFeedbackEvent, "at">,
   ) => {
     commitSnapshot({
-      ...toSnapshot(nextState),
+      ...toSnapshot(nextState, runtimeRef.current),
       recentEvent:
         event === undefined
           ? snapshotRef.current.recentEvent
@@ -206,7 +240,7 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
     });
   };
 
-  const spawnNextPiece = (
+  const spawnFromBag = (
     baseSnapshot: GameSnapshot,
     holdLocked = false,
   ): GameSnapshot => {
@@ -226,20 +260,41 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
       holdLocked,
     });
 
-    if (!canPlacePiece(updatedQueue.board, nextPiece)) {
-      return toSnapshot(
-        transitionGameState(
-          {
-            ...updatedQueue,
-            activePiece: null,
-          },
-          { type: "GAME_OVER" },
-        ),
-      );
+    if (canPlacePiece(updatedQueue.board, nextPiece)) {
+      return toSnapshot(updatedQueue, runtimeRef.current);
     }
 
-    return toSnapshot(updatedQueue);
+    if (mode === "ZEN") {
+      const resetBoardState = {
+        ...updatedQueue,
+        board: createEmptyBoard(),
+      };
+      const zenSpawn = transitionGameState(resetBoardState, {
+        type: "SPAWN_PIECE",
+        piece: nextPiece,
+      });
+      return toSnapshot(zenSpawn, runtimeRef.current);
+    }
+
+    return toSnapshot(
+      transitionGameState(
+        {
+          ...updatedQueue,
+          activePiece: null,
+        },
+        { type: "GAME_OVER" },
+      ),
+      runtimeRef.current,
+    );
   };
+
+  const createModeCompleteEvent = (message: string): GameFeedbackEvent => ({
+    kind: "mode-complete",
+    message,
+    clearedLines: 0,
+    clearedRows: [],
+    at: performance.now(),
+  });
 
   const lockCurrentPiece = () => {
     const currentSnapshot = snapshotRef.current;
@@ -260,7 +315,7 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
     });
     const leveledScore = {
       ...scoreBreakdown.nextScoreState,
-      level: nextLevel(scoreBreakdown.nextScoreState.linesCleared),
+      level: nextLevel(mode, scoreBreakdown.nextScoreState.linesCleared),
     };
     const scoredState = transitionGameState(
       {
@@ -274,7 +329,17 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
       },
     );
 
-    const nextSnapshot = spawnNextPiece(toSnapshot(scoredState));
+    if (mode === "SPRINT" && leveledScore.linesCleared >= SPRINT_TARGET_LINES) {
+      runtimeRef.current.isModeComplete = true;
+      const completedState = transitionGameState(scoredState, { type: "GAME_OVER" });
+      commitSnapshot({
+        ...toSnapshot(completedState, runtimeRef.current),
+        recentEvent: createModeCompleteEvent("Sprint clear! 40 lines finished."),
+      });
+      return;
+    }
+
+    const nextSnapshot = spawnFromBag(toSnapshot(scoredState, runtimeRef.current));
     const nextEvent =
       nextSnapshot.phase === "GAME_OVER"
         ? {
@@ -294,12 +359,22 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
               clearedRows: [],
             };
 
+    const leveledUp = currentSnapshot.score.level !== leveledScore.level;
+
     commitSnapshot({
       ...nextSnapshot,
-      recentEvent: {
-        ...nextEvent,
-        at: performance.now(),
-      },
+      recentEvent: leveledUp
+        ? {
+            kind: "level-up",
+            message: `Level ${leveledScore.level}`,
+            clearedLines: clearResult.clearedLines,
+            clearedRows: clearResult.clearedRowIndexes,
+            at: performance.now(),
+          }
+        : {
+            ...nextEvent,
+            at: performance.now(),
+          },
     });
   };
 
@@ -337,13 +412,31 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
     return true;
   };
 
+  const resetRuntime = () => {
+    runtimeRef.current = createRuntimeRefs(mode);
+    lastFrameRef.current = null;
+    dropAccumulatorRef.current = 0;
+  };
+
   const commands: GameCommands = {
     restart: () => {
-      const runtime = createRuntimeState("CLASSIC");
-      bagRef.current = runtime.bag;
-      lastFrameRef.current = null;
-      dropAccumulatorRef.current = 0;
-      commitSnapshot(runtime.snapshot);
+      const bagState = createSevenBagState();
+      const firstDraw = drawFromBag(bagState);
+      bagRef.current = firstDraw.state;
+      resetRuntime();
+      const firstPiece = createSpawnPiece(firstDraw.piece);
+      const started = transitionGameState(createInitialGameState(mode), {
+        type: "START",
+        mode,
+        firstPiece,
+      });
+      const queued = transitionGameState(started, {
+        type: "UPDATE_QUEUE",
+        next: peekNextPieces(firstDraw.state, PREVIEW_COUNT),
+        hold: null,
+        holdLocked: false,
+      });
+      commitSnapshot(toSnapshot(queued, runtimeRef.current));
     },
     pause: () => {
       commitState(transitionGameState(snapshotRef.current, { type: "PAUSE" }), {
@@ -468,16 +561,19 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
           holdLocked: true,
         });
 
-        const nextSnapshot = spawnNextPiece(
-          toSnapshot({
-            ...heldState,
-            activePiece: null,
-            queue: {
-              ...heldState.queue,
-              hold: activePiece.type,
-              holdLocked: true,
+        const nextSnapshot = spawnFromBag(
+          toSnapshot(
+            {
+              ...heldState,
+              activePiece: null,
+              queue: {
+                ...heldState.queue,
+                hold: activePiece.type,
+                holdLocked: true,
+              },
             },
-          }),
+            runtimeRef.current,
+          ),
           true,
         );
         commitSnapshot({
@@ -499,7 +595,7 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
         holdLocked: true,
       };
 
-      if (!canPlacePiece(currentSnapshot.board, swappedPiece)) {
+      if (!canPlacePiece(currentSnapshot.board, swappedPiece) && mode !== "ZEN") {
         commitState(
           transitionGameState(
             {
@@ -596,10 +692,9 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
   }, [surfaceElement]);
 
   useEffect(() => {
-    const runtime = createRuntimeState("CLASSIC");
-    bagRef.current = runtime.bag;
-    commitSnapshot(runtime.snapshot);
-  }, []);
+    commands.restart();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   useEffect(() => {
     let frameId = 0;
@@ -615,24 +710,51 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
       lastFrameRef.current = timestamp;
 
       if (currentSnapshot.phase === "PLAYING" || currentSnapshot.phase === "ZONE_ACTIVE") {
-        const gravityInterval = getGravityIntervalMs(
-          currentSnapshot.score.level,
-          currentSnapshot.phase,
-        );
+        runtimeRef.current.elapsedMs += deltaMs;
 
-        if (Number.isFinite(gravityInterval)) {
-          dropAccumulatorRef.current += deltaMs;
+        if (mode === "BLITZ") {
+          runtimeRef.current.remainingMs = Math.max(0, runtimeRef.current.remainingMs - deltaMs);
 
-          while (dropAccumulatorRef.current >= gravityInterval) {
-            dropAccumulatorRef.current -= gravityInterval;
-
-            if (!movePiece(0, 1)) {
-              lockCurrentPiece();
-              dropAccumulatorRef.current = 0;
-              break;
-            }
+          if (runtimeRef.current.remainingMs === 0) {
+            runtimeRef.current.isModeComplete = true;
+            commitSnapshot({
+              ...toSnapshot(
+                transitionGameState(currentSnapshot, { type: "GAME_OVER" }),
+                runtimeRef.current,
+              ),
+              recentEvent: createModeCompleteEvent("Blitz complete! Time expired."),
+            });
+            frameId = window.requestAnimationFrame(tick);
+            return;
           }
         }
+
+        const gravityInterval = getGravityIntervalMs(
+          mode,
+          currentSnapshot.score.level,
+          runtimeRef.current.remainingMs,
+        );
+
+        dropAccumulatorRef.current += deltaMs;
+
+        while (dropAccumulatorRef.current >= gravityInterval) {
+          dropAccumulatorRef.current -= gravityInterval;
+
+          if (!movePiece(0, 1)) {
+            lockCurrentPiece();
+            dropAccumulatorRef.current = 0;
+            break;
+          }
+        }
+
+        commitSnapshot({
+          ...snapshotRef.current,
+          elapsedMs: runtimeRef.current.elapsedMs,
+          remainingMs: runtimeRef.current.remainingMs,
+          targetLines: getTargetLines(mode),
+          isModeComplete: runtimeRef.current.isModeComplete,
+          displayMetric: getDisplayMetric(mode, snapshotRef.current, runtimeRef.current.elapsedMs),
+        });
       }
 
       frameId = window.requestAnimationFrame(tick);
@@ -643,7 +765,7 @@ export function useGame(inputTiming: KeyboardTiming = DEFAULT_INPUT_TIMING): Use
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, []);
+  }, [mode]);
 
   return {
     snapshot,

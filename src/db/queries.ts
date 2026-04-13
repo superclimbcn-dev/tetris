@@ -69,6 +69,10 @@ export function getDatabaseReadiness(): DatabaseReadiness {
   return process.env.DATABASE_URL && process.env.DIRECT_URL ? "ready" : "missing-env";
 }
 
+function isLowerScoreBetter(mode: GameMode): boolean {
+  return mode === "SPRINT";
+}
+
 function guestNameFromId(guestId: string): string {
   return `Guest ${guestId.slice(-6).toUpperCase()}`;
 }
@@ -148,7 +152,9 @@ export async function getLeaderboard(
   return prisma.scoreEntry.findMany({
     where: { mode },
     select: leaderboardEntrySelect,
-    orderBy: [{ score: "desc" }, { lines: "desc" }, { timestamp: "asc" }],
+    orderBy: isLowerScoreBetter(mode)
+      ? [{ score: "asc" }, { lines: "desc" }, { timestamp: "asc" }]
+      : [{ score: "desc" }, { lines: "desc" }, { timestamp: "asc" }],
     take: limit,
   });
 }
@@ -156,7 +162,9 @@ export async function getLeaderboard(
 export async function getUserPB(userId: string, mode: GameMode): Promise<number> {
   const topScore = await prisma.scoreEntry.findFirst({
     where: { userId, mode },
-    orderBy: [{ score: "desc" }, { lines: "desc" }, { timestamp: "asc" }],
+    orderBy: isLowerScoreBetter(mode)
+      ? [{ score: "asc" }, { lines: "desc" }, { timestamp: "asc" }]
+      : [{ score: "desc" }, { lines: "desc" }, { timestamp: "asc" }],
     select: {
       score: true,
     },
@@ -181,14 +189,21 @@ export async function saveScore(input: SaveScoreInput): Promise<SaveScoreResult>
         userId: input.userId,
         mode: input.mode,
       },
-      orderBy: [{ score: "desc" }, { lines: "desc" }, { timestamp: "asc" }],
+      orderBy: isLowerScoreBetter(input.mode)
+        ? [{ score: "asc" }, { lines: "desc" }, { timestamp: "asc" }]
+        : [{ score: "desc" }, { lines: "desc" }, { timestamp: "asc" }],
       select: {
         id: true,
         score: true,
       },
     });
 
-    const isNewPersonalBest = input.score > (previousBest?.score ?? 0);
+    const isNewPersonalBest =
+      previousBest === null
+        ? true
+        : isLowerScoreBetter(input.mode)
+          ? input.score < previousBest.score
+          : input.score > previousBest.score;
 
     if (isNewPersonalBest) {
       await transaction.scoreEntry.updateMany({
@@ -217,7 +232,12 @@ export async function saveScore(input: SaveScoreInput): Promise<SaveScoreResult>
 
     return {
       entry: createdEntry,
-      personalBest: Math.max(previousBest?.score ?? 0, input.score),
+      personalBest:
+        previousBest === null
+          ? input.score
+          : isLowerScoreBetter(input.mode)
+            ? Math.min(previousBest.score, input.score)
+            : Math.max(previousBest.score, input.score),
       isNewPersonalBest,
     };
   });

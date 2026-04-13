@@ -5,10 +5,12 @@ import { getPieceCoordinates } from "@/engine/core/collision";
 import type { BoardRow, CellState } from "@/engine/types/board";
 import { DEFAULT_SHAKE } from "@/render/effects/screen-shake";
 import type { GameFeedbackEvent, GameSnapshot } from "@/hooks/useGame";
+import { getTheme, type ThemeName } from "@/themes";
 
 type GameCanvasProps = {
   readonly snapshot: GameSnapshot;
   readonly ghostEnabled?: boolean;
+  readonly theme?: ThemeName;
 };
 
 type Particle = {
@@ -77,6 +79,7 @@ function shouldShake(event: GameFeedbackEvent): boolean {
 export function GameCanvas({
   snapshot,
   ghostEnabled = true,
+  theme = "neon",
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const snapshotRef = useRef(snapshot);
@@ -177,6 +180,7 @@ export function GameCanvas({
 
     const render = (timestamp: number) => {
       const current = snapshotRef.current;
+      const currentTheme = getTheme(theme);
       const deltaMs = lastTimestamp === 0 ? 16 : timestamp - lastTimestamp;
       lastTimestamp = timestamp;
 
@@ -201,19 +205,19 @@ export function GameCanvas({
       context.translate(shakeOffsetX, shakeOffsetY);
 
       const background = context.createLinearGradient(0, 0, 0, canvas.height);
-      background.addColorStop(0, "#020617");
-      background.addColorStop(1, "#0f172a");
+      background.addColorStop(0, currentTheme.backgroundTop);
+      background.addColorStop(1, currentTheme.backgroundBottom);
       context.fillStyle = background;
       context.fillRect(0, 0, canvas.width, canvas.height);
 
       const boardGlow = context.createRadialGradient(CENTER_X, CENTER_Y, 40, CENTER_X, CENTER_Y, 380);
-      boardGlow.addColorStop(0, "rgba(239,68,68,0.14)");
+      boardGlow.addColorStop(0, currentTheme.glow);
       boardGlow.addColorStop(0.5, "rgba(56,189,248,0.08)");
       boardGlow.addColorStop(1, "rgba(15,23,42,0)");
       context.fillStyle = boardGlow;
       context.fillRect(0, 0, canvas.width, canvas.height);
 
-      context.fillStyle = "#081121";
+      context.fillStyle = currentTheme.board;
       context.fillRect(
         BOARD_PADDING,
         BOARD_PADDING,
@@ -221,7 +225,7 @@ export function GameCanvas({
         BOARD_PIXEL_HEIGHT,
       );
 
-      context.strokeStyle = "rgba(148,163,184,0.12)";
+      context.strokeStyle = currentTheme.grid;
       context.lineWidth = 1;
 
       for (let column = 0; column <= 10; column += 1) {
@@ -316,7 +320,7 @@ export function GameCanvas({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [ghostEnabled]);
+  }, [ghostEnabled, theme]);
 
   return (
     <canvas

@@ -1,10 +1,5 @@
-import { GameRouteCard } from "@/components/game-route-card";
+import { GameModeExperience } from "@/components/GameModeExperience";
 
 export default function ZenPage() {
-  return (
-    <GameRouteCard
-      mode="Zen"
-      description="Relaxed route placeholder for low-pressure endless play."
-    />
-  );
+  return <GameModeExperience mode="ZEN" />;
 }

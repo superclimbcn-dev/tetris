@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { type ThemeName, isThemeName } from "@/themes";
 
 export type InputSettings = {
   readonly das: number;
@@ -14,6 +15,7 @@ export type AudioSettings = {
 
 export type GameplaySettings = {
   readonly ghostEnabled: boolean;
+  readonly theme: ThemeName;
 };
 
 export type UserSettingsSnapshot = {
@@ -65,6 +67,7 @@ function toAudioSettings(settings: UserSettingsSnapshot): AudioSettings {
 function toGameplaySettings(settings: UserSettingsSnapshot): GameplaySettings {
   return {
     ghostEnabled: settings.ghostEnabled,
+    theme: isThemeName(settings.theme) ? settings.theme : "neon",
   };
 }
 
@@ -181,6 +184,7 @@ export function useSettings(userId: string) {
         ...current,
         userId,
         ghostEnabled: next.ghostEnabled ?? current.ghostEnabled,
+        theme: next.theme ?? current.theme,
       }));
     },
   };
