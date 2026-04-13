@@ -1,13 +1,4 @@
-module.exports = {
-  turbopack: {
-    rules: {
-      "*.svg": {
-        loaders: ["@svgr/webpack"],
-        as: "*.js",
-        condition: {
-          path: /abc/,
-        },
-      },
-    },
-  },
-};
+/** @type {import('next').NextConfig} */
+const nextConfig = {};
+
+module.exports = nextConfig;

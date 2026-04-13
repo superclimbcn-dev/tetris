@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum GameMode {
+  CLASSIC
+  ZEN
+  SPRINT
+  BLITZ
+}
+
+model User {
+  id        String        @id @default(cuid())
+  email     String?       @unique
+  name      String?
+  image     String?
+  sessions  GameSession[]
+  scores    ScoreEntry[]
+  settings  UserSettings?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+}
+
+model GameSession {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mode         GameMode
+  startTime    DateTime  @default(now())
+  endTime      DateTime?
+  finalScore   Int?
+  maxLevel     Int?
+  linesCleared Int?
+  replayData   Json?
+
+  @@index([userId, startTime])
+  @@index([mode, startTime])
+}
+
+model ScoreEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  score     Int
+  level     Int
+  lines     Int
+  mode      GameMode
+  timestamp DateTime @default(now())
+  isPB      Boolean  @default(false)
+
+  @@index([userId, timestamp])
+  @@index([mode, score(sort: Desc)])
+}
+
+model UserSettings {
+  id           String  @id @default(cuid())
+  userId       String  @unique
+  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  das          Int     @default(167)
+  arr          Int     @default(33)
+  sfxVolume    Float   @default(0.7)
+  musicVolume  Float   @default(0.5)
+  theme        String  @default("neon")
+  ghostEnabled Boolean @default(true)
+}
