@@ -15,6 +15,7 @@ type AudioInput = {
 type UseAudioResult = {
   readonly enabled: boolean;
   readonly setEnabled: (enabled: boolean) => void;
+  readonly prime: () => Promise<void>;
 };
 
 type ToneOptions = {
@@ -178,29 +179,35 @@ export function useAudio(input: AudioInput): UseAudioResult {
   const lastEventAtRef = useRef<number | null>(null);
   const stepIndexRef = useRef(0);
 
+  const prime = async () => {
+    if (!enabled) {
+      return;
+    }
+
+    const context = contextRef.current ?? createContext();
+    contextRef.current = context;
+
+    if (context !== null && context.state !== "running") {
+      await context.resume();
+    }
+  };
+
   useEffect(() => {
     if (!enabled) {
       return;
     }
 
-    const unlock = async () => {
-      const context = contextRef.current ?? createContext();
-      contextRef.current = context;
-
-      if (context !== null && context.state !== "running") {
-        await context.resume();
-      }
-    };
-
     const handleUnlock = () => {
-      void unlock();
+      void prime();
     };
 
-    window.addEventListener("pointerdown", handleUnlock, { once: true });
-    window.addEventListener("keydown", handleUnlock, { once: true });
+    window.addEventListener("pointerdown", handleUnlock, { passive: true });
+    window.addEventListener("touchstart", handleUnlock, { passive: true });
+    window.addEventListener("keydown", handleUnlock);
 
     return () => {
       window.removeEventListener("pointerdown", handleUnlock);
+      window.removeEventListener("touchstart", handleUnlock);
       window.removeEventListener("keydown", handleUnlock);
     };
   }, [enabled]);
@@ -267,5 +274,6 @@ export function useAudio(input: AudioInput): UseAudioResult {
   return {
     enabled,
     setEnabled,
+    prime,
   };
 }

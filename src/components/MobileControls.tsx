@@ -3,6 +3,7 @@
 import { ArrowBigDown, ArrowLeft, ArrowRight, RotateCw, Save } from "lucide-react";
 
 type MobileControlsProps = {
+  readonly onPrimeAudio: () => void;
   readonly onMoveLeft: () => void;
   readonly onMoveRight: () => void;
   readonly onRotate: () => void;
@@ -15,6 +16,7 @@ function vibrateBriefly() {
 }
 
 export function MobileControls({
+  onPrimeAudio,
   onMoveLeft,
   onMoveRight,
   onRotate,
@@ -22,6 +24,7 @@ export function MobileControls({
   onHold,
 }: MobileControlsProps) {
   const trigger = (callback: () => void) => {
+    onPrimeAudio();
     vibrateBriefly();
     callback();
   };

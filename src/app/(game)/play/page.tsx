@@ -89,7 +89,15 @@ export default function PlayPage() {
   }, []);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-6 pb-32 md:px-6 md:pb-6">
+    <main
+      className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-6 pb-32 md:px-6 md:pb-6"
+      onPointerDownCapture={() => {
+        void audioControls.prime();
+      }}
+      onTouchStartCapture={() => {
+        void audioControls.prime();
+      }}
+    >
       <section className="mb-6 rounded-3xl border border-border/60 bg-card/70 p-6 shadow-2xl shadow-black/20 backdrop-blur">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-3">
@@ -273,6 +281,9 @@ export default function PlayPage() {
 
       {isTouchDevice ? (
         <MobileControls
+          onPrimeAudio={() => {
+            void audioControls.prime();
+          }}
           onMoveLeft={commands.moveLeft}
           onMoveRight={commands.moveRight}
           onRotate={commands.rotateClockwise}
