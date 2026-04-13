@@ -68,7 +68,7 @@ function toGameplaySettings(settings: UserSettingsSnapshot): GameplaySettings {
   };
 }
 
-export function useSettings() {
+export function useSettings(userId: string) {
   const [settings, setSettings] = useState<UserSettingsSnapshot>(DEFAULT_SETTINGS);
   const [databaseReady, setDatabaseReady] = useState(false);
   const saveTimeoutRef = useRef<number | null>(null);
@@ -80,7 +80,10 @@ export function useSettings() {
     if (stored !== null) {
       try {
         const parsed = JSON.parse(stored) as UserSettingsSnapshot;
-        setSettings(parsed);
+        setSettings({
+          ...parsed,
+          userId,
+        });
       } catch {
         window.localStorage.removeItem(STORAGE_KEY);
       }
@@ -88,22 +91,30 @@ export function useSettings() {
 
     const loadSettings = async () => {
       try {
-        const response = await fetch(`/api/settings?userId=${DEFAULT_SETTINGS.userId}`, {
+        const response = await fetch(`/api/settings?userId=${userId}`, {
           cache: "no-store",
         });
         const payload = (await response.json()) as SettingsApiResponse;
         setDatabaseReady(payload.databaseReady);
-        setSettings(payload.settings);
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload.settings));
+        const nextSettings = {
+          ...payload.settings,
+          userId,
+        };
+        setSettings(nextSettings);
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSettings));
       } catch {
         setDatabaseReady(false);
+        setSettings((current) => ({
+          ...current,
+          userId,
+        }));
       } finally {
         hasLoadedRef.current = true;
       }
     };
 
     void loadSettings();
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     if (!hasLoadedRef.current) {
@@ -152,6 +163,7 @@ export function useSettings() {
     updateInputSettings: (next: Partial<InputSettings>) => {
       setSettings((current) => ({
         ...current,
+        userId,
         das: clamp(next.das ?? current.das, 50, 300),
         arr: clamp(next.arr ?? current.arr, 0, 100),
       }));
@@ -159,6 +171,7 @@ export function useSettings() {
     updateAudioSettings: (next: Partial<AudioSettings>) => {
       setSettings((current) => ({
         ...current,
+        userId,
         sfxVolume: clamp(next.sfxVolume ?? current.sfxVolume, 0, 1),
         musicVolume: clamp(next.musicVolume ?? current.musicVolume, 0, 1),
       }));
@@ -166,6 +179,7 @@ export function useSettings() {
     updateGameplaySettings: (next: Partial<GameplaySettings>) => {
       setSettings((current) => ({
         ...current,
+        userId,
         ghostEnabled: next.ghostEnabled ?? current.ghostEnabled,
       }));
     },

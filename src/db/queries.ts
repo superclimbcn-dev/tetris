@@ -2,6 +2,7 @@ import { Prisma, type GameMode } from "@prisma/client";
 import { prisma } from "@/db/client";
 
 export type DatabaseReadiness = "missing-env" | "ready";
+
 export type PersistedUserSettings = {
   readonly userId: string;
   readonly das: number;
@@ -10,6 +11,12 @@ export type PersistedUserSettings = {
   readonly musicVolume: number;
   readonly theme: string;
   readonly ghostEnabled: boolean;
+};
+
+export type UserIdentity = {
+  readonly id: string;
+  readonly name: string | null;
+  readonly image: string | null;
 };
 
 export const DEFAULT_USER_SETTINGS: PersistedUserSettings = {
@@ -24,6 +31,7 @@ export const DEFAULT_USER_SETTINGS: PersistedUserSettings = {
 
 export const leaderboardEntrySelect = Prisma.validator<Prisma.ScoreEntrySelect>()({
   id: true,
+  userId: true,
   score: true,
   level: true,
   lines: true,
@@ -43,24 +51,51 @@ export type LeaderboardEntry = Prisma.ScoreEntryGetPayload<{
   select: typeof leaderboardEntrySelect;
 }>;
 
+export type SaveScoreInput = {
+  readonly userId: string;
+  readonly mode: GameMode;
+  readonly score: number;
+  readonly level: number;
+  readonly lines: number;
+};
+
+export type SaveScoreResult = {
+  readonly entry: LeaderboardEntry;
+  readonly personalBest: number;
+  readonly isNewPersonalBest: boolean;
+};
+
 export function getDatabaseReadiness(): DatabaseReadiness {
   return process.env.DATABASE_URL && process.env.DIRECT_URL ? "ready" : "missing-env";
 }
 
-export async function ensureUser(userId: string) {
-  return prisma.user.upsert({
-    where: { id: userId },
-    update: {},
-    create: {
-      id: userId,
-      name: "Local Player",
-    },
-  });
+function guestNameFromId(guestId: string): string {
+  return `Guest ${guestId.slice(-6).toUpperCase()}`;
 }
 
-export async function getUserSettings(
-  userId: string,
-): Promise<PersistedUserSettings> {
+export async function createUser(guestId: string): Promise<UserIdentity> {
+  const user = await prisma.user.upsert({
+    where: { id: guestId },
+    update: {},
+    create: {
+      id: guestId,
+      name: guestNameFromId(guestId),
+    },
+    select: {
+      id: true,
+      name: true,
+      image: true,
+    },
+  });
+
+  return user;
+}
+
+export async function ensureUser(userId: string): Promise<UserIdentity> {
+  return createUser(userId);
+}
+
+export async function getUserSettings(userId: string): Promise<PersistedUserSettings> {
   const settings = await prisma.userSettings.findUnique({
     where: { userId },
     select: {
@@ -84,53 +119,14 @@ export async function getUserSettings(
   return settings;
 }
 
-export async function listTopScoresByMode(
-  mode: GameMode,
-  take = 10,
-): Promise<LeaderboardEntry[]> {
-  return prisma.scoreEntry.findMany({
-    where: { mode },
-    select: leaderboardEntrySelect,
-    orderBy: [{ score: "desc" }, { timestamp: "asc" }],
-    take,
-  });
-}
-
-export async function createGameSession(userId: string, mode: GameMode) {
-  return prisma.gameSession.create({
-    data: {
-      userId,
-      mode,
-    },
-  });
-}
-
-export async function finishGameSession(input: {
-  sessionId: string;
-  finalScore: number;
-  maxLevel: number;
-  linesCleared: number;
-  replayData?: Prisma.InputJsonValue;
-}) {
-  const { sessionId, ...data } = input;
-
-  return prisma.gameSession.update({
-    where: { id: sessionId },
-    data: {
-      ...data,
-      endTime: new Date(),
-    },
-  });
-}
-
 export async function upsertUserSettings(input: {
-  userId: string;
-  das: number;
-  arr: number;
-  sfxVolume: number;
-  musicVolume: number;
-  theme: string;
-  ghostEnabled: boolean;
+  readonly userId: string;
+  readonly das: number;
+  readonly arr: number;
+  readonly sfxVolume: number;
+  readonly musicVolume: number;
+  readonly theme: string;
+  readonly ghostEnabled: boolean;
 }) {
   const { userId, ...data } = input;
   await ensureUser(userId);
@@ -142,5 +138,115 @@ export async function upsertUserSettings(input: {
       ...data,
     },
     update: data,
+  });
+}
+
+export async function getLeaderboard(
+  mode: GameMode,
+  limit = 10,
+): Promise<LeaderboardEntry[]> {
+  return prisma.scoreEntry.findMany({
+    where: { mode },
+    select: leaderboardEntrySelect,
+    orderBy: [{ score: "desc" }, { lines: "desc" }, { timestamp: "asc" }],
+    take: limit,
+  });
+}
+
+export async function getUserPB(userId: string, mode: GameMode): Promise<number> {
+  const topScore = await prisma.scoreEntry.findFirst({
+    where: { userId, mode },
+    orderBy: [{ score: "desc" }, { lines: "desc" }, { timestamp: "asc" }],
+    select: {
+      score: true,
+    },
+  });
+
+  return topScore?.score ?? 0;
+}
+
+export async function saveScore(input: SaveScoreInput): Promise<SaveScoreResult> {
+  return prisma.$transaction(async (transaction) => {
+    await transaction.user.upsert({
+      where: { id: input.userId },
+      update: {},
+      create: {
+        id: input.userId,
+        name: guestNameFromId(input.userId),
+      },
+    });
+
+    const previousBest = await transaction.scoreEntry.findFirst({
+      where: {
+        userId: input.userId,
+        mode: input.mode,
+      },
+      orderBy: [{ score: "desc" }, { lines: "desc" }, { timestamp: "asc" }],
+      select: {
+        id: true,
+        score: true,
+      },
+    });
+
+    const isNewPersonalBest = input.score > (previousBest?.score ?? 0);
+
+    if (isNewPersonalBest) {
+      await transaction.scoreEntry.updateMany({
+        where: {
+          userId: input.userId,
+          mode: input.mode,
+          isPB: true,
+        },
+        data: {
+          isPB: false,
+        },
+      });
+    }
+
+    const createdEntry = await transaction.scoreEntry.create({
+      data: {
+        userId: input.userId,
+        score: input.score,
+        level: input.level,
+        lines: input.lines,
+        mode: input.mode,
+        isPB: isNewPersonalBest,
+      },
+      select: leaderboardEntrySelect,
+    });
+
+    return {
+      entry: createdEntry,
+      personalBest: Math.max(previousBest?.score ?? 0, input.score),
+      isNewPersonalBest,
+    };
+  });
+}
+
+export async function createGameSession(userId: string, mode: GameMode) {
+  await ensureUser(userId);
+
+  return prisma.gameSession.create({
+    data: {
+      userId,
+      mode,
+    },
+  });
+}
+
+export async function endGameSession(
+  sessionId: string,
+  score: number,
+  lines: number,
+  level?: number,
+) {
+  return prisma.gameSession.update({
+    where: { id: sessionId },
+    data: {
+      finalScore: score,
+      linesCleared: lines,
+      maxLevel: level,
+      endTime: new Date(),
+    },
   });
 }

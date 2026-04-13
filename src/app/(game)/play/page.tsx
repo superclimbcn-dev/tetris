@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type GameMode } from "@prisma/client";
+import { useEffect, useRef, useState } from "react";
 import { MobileControls } from "@/components/MobileControls";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getRotationMatrix, type TetrominoType } from "@/engine/types/tetromino";
 import { useAudio } from "@/hooks/useAudio";
 import { useGame } from "@/hooks/useGame";
+import { useGuestIdentity } from "@/hooks/useGuestIdentity";
 import { useSettings } from "@/hooks/useSettings";
 import { GameCanvas } from "@/render/canvas/GameCanvas";
 import { Hud } from "@/render/ui/hud";
@@ -15,6 +17,41 @@ type PiecePreviewProps = {
   readonly title: string;
   readonly type: TetrominoType | null;
 };
+
+type LeaderboardEntry = {
+  readonly id: string;
+  readonly userId: string;
+  readonly score: number;
+  readonly level: number;
+  readonly lines: number;
+  readonly mode: GameMode;
+  readonly timestamp: string;
+  readonly isPB: boolean;
+  readonly user: {
+    readonly id: string;
+    readonly name: string | null;
+    readonly image: string | null;
+  };
+};
+
+type ScoresGetResponse = {
+  readonly databaseReady: boolean;
+  readonly scores: readonly LeaderboardEntry[];
+};
+
+type PersonalBestResponse = {
+  readonly databaseReady: boolean;
+  readonly personalBest: number;
+};
+
+type SaveScoreResponse = {
+  readonly persisted: boolean;
+  readonly databaseReady: boolean;
+  readonly isNewPersonalBest: boolean;
+  readonly personalBest: number;
+};
+
+const PLAY_MODE: GameMode = "CLASSIC";
 
 function PiecePreview({ title, type }: PiecePreviewProps) {
   const matrix = type === null ? null : getRotationMatrix(type, 0);
@@ -50,8 +87,22 @@ function PiecePreview({ title, type }: PiecePreviewProps) {
   );
 }
 
+function formatPlayerName(entry: LeaderboardEntry): string {
+  return entry.user.name ?? `Guest ${entry.userId.slice(-6).toUpperCase()}`;
+}
+
 export default function PlayPage() {
   const [isTouchDevice, setIsTouchDevice] = useState(false);
+  const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(false);
+  const [leaderboardEntries, setLeaderboardEntries] = useState<readonly LeaderboardEntry[]>([]);
+  const [leaderboardReady, setLeaderboardReady] = useState(false);
+  const [personalBest, setPersonalBest] = useState(0);
+  const [saveMessage, setSaveMessage] = useState<string>("No score saved yet.");
+  const [isNewPersonalBest, setIsNewPersonalBest] = useState(false);
+  const { guestId } = useGuestIdentity();
+  const lastSavedGameOverAtRef = useRef<number | null>(null);
+  const previousPhaseRef = useRef<string | null>(null);
+
   const {
     settings,
     input,
@@ -61,7 +112,7 @@ export default function PlayPage() {
     updateInputSettings,
     updateAudioSettings,
     updateGameplaySettings,
-  } = useSettings();
+  } = useSettings(guestId);
   const { snapshot, commands, setSurfaceElement } = useGame({
     dasMs: input.das,
     arrMs: input.arr,
@@ -72,6 +123,23 @@ export default function PlayPage() {
     sfxVolume: audio.sfxVolume,
     musicVolume: audio.musicVolume,
   });
+
+  const loadLeaderboard = async () => {
+    const response = await fetch(`/api/scores?mode=${PLAY_MODE}&limit=10`, {
+      cache: "no-store",
+    });
+    const payload = (await response.json()) as ScoresGetResponse;
+    setLeaderboardEntries(payload.scores);
+    setLeaderboardReady(payload.databaseReady);
+  };
+
+  const loadPersonalBest = async () => {
+    const response = await fetch(`/api/scores/pb?userId=${guestId}&mode=${PLAY_MODE}`, {
+      cache: "no-store",
+    });
+    const payload = (await response.json()) as PersonalBestResponse;
+    setPersonalBest(payload.personalBest);
+  };
 
   useEffect(() => {
     const coarsePointerMedia = window.matchMedia("(pointer: coarse)");
@@ -87,6 +155,84 @@ export default function PlayPage() {
       coarsePointerMedia.removeEventListener("change", updateTouchState);
     };
   }, []);
+
+  useEffect(() => {
+    if (guestId === "guest-pending") {
+      return;
+    }
+
+    void loadLeaderboard();
+    void loadPersonalBest();
+  }, [guestId]);
+
+  useEffect(() => {
+    if (!isLeaderboardOpen) {
+      return;
+    }
+
+    void loadLeaderboard();
+  }, [isLeaderboardOpen]);
+
+  useEffect(() => {
+    const currentEvent = snapshot.recentEvent;
+
+    if (
+      guestId === "guest-pending" ||
+      currentEvent === null ||
+      currentEvent.kind !== "game-over" ||
+      lastSavedGameOverAtRef.current === currentEvent.at
+    ) {
+      return;
+    }
+
+    lastSavedGameOverAtRef.current = currentEvent.at;
+
+    const persistScore = async () => {
+      const response = await fetch("/api/scores", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: guestId,
+          mode: PLAY_MODE,
+          score: snapshot.score.score,
+          level: snapshot.score.level,
+          lines: snapshot.score.linesCleared,
+        }),
+      });
+      const payload = (await response.json()) as SaveScoreResponse;
+
+      setIsNewPersonalBest(payload.isNewPersonalBest);
+      setPersonalBest(payload.personalBest);
+      setSaveMessage(
+        payload.persisted
+          ? payload.isNewPersonalBest
+            ? "NEW PB! Score saved to leaderboard."
+            : "Score saved to leaderboard."
+          : "Database still unavailable. Score kept locally in this session.",
+      );
+      setIsLeaderboardOpen(true);
+      await loadLeaderboard();
+    };
+
+    void persistScore();
+  }, [
+    guestId,
+    snapshot.recentEvent,
+    snapshot.score.level,
+    snapshot.score.linesCleared,
+    snapshot.score.score,
+  ]);
+
+  useEffect(() => {
+    if (previousPhaseRef.current === "GAME_OVER" && snapshot.phase === "PLAYING") {
+      setIsNewPersonalBest(false);
+      setSaveMessage("No score saved yet.");
+    }
+
+    previousPhaseRef.current = snapshot.phase;
+  }, [snapshot.phase]);
 
   return (
     <main
@@ -109,12 +255,15 @@ export default function PlayPage() {
             </h1>
             <p className="max-w-3xl text-sm leading-7 text-muted-foreground md:text-base">
               Gravity, movement, rotation, hold, hard drop, ghost piece, line clear,
-              and scoreboard are now connected to the typed engine.
+              scoreboard, guest persistence, and leaderboard APIs are now connected.
             </p>
           </div>
 
           <div className="flex flex-wrap gap-3">
             <Button onClick={commands.restart}>Restart</Button>
+            <Button variant="outline" onClick={() => setIsLeaderboardOpen(true)}>
+              Leaderboard
+            </Button>
             <Button
               variant="outline"
               onClick={
@@ -136,6 +285,16 @@ export default function PlayPage() {
             lines={snapshot.score.linesCleared}
           />
           <PiecePreview title="Hold" type={snapshot.queue.hold} />
+          <Card className="border-border/60 bg-card/60 backdrop-blur">
+            <CardHeader>
+              <CardTitle className="text-base">Profile</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm text-muted-foreground">
+              <p>Guest ID: {guestId === "guest-pending" ? "loading..." : guestId.slice(-12)}</p>
+              <p>Personal best: {personalBest}</p>
+              <p className={isNewPersonalBest ? "font-semibold text-primary" : ""}>{saveMessage}</p>
+            </CardContent>
+          </Card>
           <Card className="border-border/60 bg-card/60 backdrop-blur">
             <CardHeader>
               <CardTitle className="text-base">Input Settings</CardTitle>
@@ -276,6 +435,31 @@ export default function PlayPage() {
               ))}
             </CardContent>
           </Card>
+          <Card className="border-border/60 bg-card/60 backdrop-blur">
+            <CardHeader>
+              <CardTitle className="text-base">Top 3</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {leaderboardEntries.slice(0, 3).map((entry, index) => (
+                <div
+                  key={entry.id}
+                  className="rounded-2xl border border-border/60 bg-background/70 p-3 text-sm"
+                >
+                  <p className="font-medium">
+                    #{index + 1} {formatPlayerName(entry)}
+                  </p>
+                  <p className="text-muted-foreground">
+                    {entry.score} pts • {entry.lines} lines • Lv {entry.level}
+                  </p>
+                </div>
+              ))}
+              {leaderboardEntries.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No scores yet or database still offline.
+                </p>
+              ) : null}
+            </CardContent>
+          </Card>
         </aside>
       </section>
 
@@ -290,6 +474,52 @@ export default function PlayPage() {
           onHardDrop={commands.hardDrop}
           onHold={commands.hold}
         />
+      ) : null}
+
+      {isLeaderboardOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <Card className="max-h-[80vh] w-full max-w-2xl overflow-hidden border-border/60 bg-card/95">
+            <CardHeader className="flex flex-row items-center justify-between gap-4">
+              <div>
+                <CardTitle>Leaderboard</CardTitle>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {leaderboardReady ? "Top 10 Classic scores" : "Database not ready yet"}
+                </p>
+              </div>
+              <Button variant="outline" onClick={() => setIsLeaderboardOpen(false)}>
+                Close
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-3 overflow-y-auto">
+              {leaderboardEntries.map((entry, index) => (
+                <div
+                  key={entry.id}
+                  className="grid grid-cols-[auto_1fr_auto] items-center gap-4 rounded-2xl border border-border/60 bg-background/70 p-3"
+                >
+                  <div className="text-lg font-semibold text-primary">#{index + 1}</div>
+                  <div>
+                    <p className="font-medium">{formatPlayerName(entry)}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {entry.lines} lines • Lv {entry.level}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold">{entry.score}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {entry.isPB ? "PB" : "Score"}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              {leaderboardEntries.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No scores available yet. As soon as Neon is writable here, this overlay
+                  will populate automatically.
+                </p>
+              ) : null}
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
     </main>
   );
