@@ -2,7 +2,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
     "prisma:generate": "prisma generate",
@@ -15,15 +15,16 @@
     "clsx": "2.1.1",
     "lucide-react": "1.8.0",
     "next": "16.2.3",
+    "next-pwa": "^5.6.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "tailwind-merge": "3.5.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "4.2.2",
     "@types/node": "^18.0.0",
     "@types/react": "^18.0.14",
     "@types/react-dom": "^18.0.5",
-    "@tailwindcss/postcss": "4.2.2",
     "postcss": "8.5.6",
     "prisma": "6.19.3",
     "tailwindcss": "4.2.2",

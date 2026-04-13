@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   title: "Tetris Nexus",
   description: "Fast, installable Tetris with typed engine architecture.",
   applicationName: "Tetris Nexus",
-  manifest: "/manifest.webmanifest",
+  manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -14,6 +14,9 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
   themeColor: "#fb7185",
 };
 

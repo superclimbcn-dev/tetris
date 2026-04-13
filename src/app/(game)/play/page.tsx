@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { MobileControls } from "@/components/MobileControls";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getRotationMatrix, type TetrominoType } from "@/engine/types/tetromino";
@@ -49,6 +51,7 @@ function PiecePreview({ title, type }: PiecePreviewProps) {
 }
 
 export default function PlayPage() {
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
   const {
     settings,
     input,
@@ -70,8 +73,23 @@ export default function PlayPage() {
     musicVolume: audio.musicVolume,
   });
 
+  useEffect(() => {
+    const coarsePointerMedia = window.matchMedia("(pointer: coarse)");
+
+    const updateTouchState = () => {
+      setIsTouchDevice("ontouchstart" in window || coarsePointerMedia.matches);
+    };
+
+    updateTouchState();
+    coarsePointerMedia.addEventListener("change", updateTouchState);
+
+    return () => {
+      coarsePointerMedia.removeEventListener("change", updateTouchState);
+    };
+  }, []);
+
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-6 md:px-6">
+    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-6 pb-32 md:px-6 md:pb-6">
       <section className="mb-6 rounded-3xl border border-border/60 bg-card/70 p-6 shadow-2xl shadow-black/20 backdrop-blur">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-3">
@@ -252,6 +270,16 @@ export default function PlayPage() {
           </Card>
         </aside>
       </section>
+
+      {isTouchDevice ? (
+        <MobileControls
+          onMoveLeft={commands.moveLeft}
+          onMoveRight={commands.moveRight}
+          onRotate={commands.rotateClockwise}
+          onHardDrop={commands.hardDrop}
+          onHold={commands.hold}
+        />
+      ) : null}
     </main>
   );
 }
